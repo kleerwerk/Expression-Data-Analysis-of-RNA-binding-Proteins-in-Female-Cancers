@@ -1,0 +1,598 @@
+---
+title: "RB2OC - Data Analysis"
+author: "Jamie Kleer"
+date: "2025-07-16"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(scales)
+```
+
+# Preface  
+
+This markdown is the basis for the bachelor's thesis done by Jamie Kleer under supervision of PD Dr. Maïwen Caudron-Herger and Prof. Dr. Benedikt Brors at DKFZ (German Cancer Research Center).  
+The project consists of a data analysis performed in R concerning the effect of four proteins - TIA1, TIAL1, TPX2, and AURKA on breast and ovarian cancer patients. It will compare protein and mRNA expression with clinical data, genomic stability as well as their correlation with mutations or expression of tumor suppressor genes BRCA1, BRCA2, and TP53. The data for this study is provided by the TCGA PanCancer Atlas.  
+
+# Opening Data
+
+```{r}
+bc_pe_raw = read.delim("data/BC_TCGA_PanCan/Protein expression z-scores (mass spectrometry by CPTAC).txt", header = TRUE,sep = "\t")  
+bc_mrna_raw = read.delim("data/BC_TCGA_PanCan/mRNA expression z-scores relative to all samples (log RNA Seq V2 RSEM).txt", header = TRUE, sep = "\t")
+bc_cd_raw = read.delim("data/BC_TCGA_PanCan/brca_tcga_pan_can_atlas_2018_clinical_data.tsv", 
+                       header = TRUE)  
+bc_cna_raw = read.delim("data/BC_TCGA_PanCan/cna.txt", header = TRUE, sep = "\t")
+bc_mut_raw = read.delim("data/BC_TCGA_PanCan/mutations.txt", header = TRUE, sep = "\t") 
+
+oc_pe_raw = read.delim("data/OC_TCGA_PanCan/Protein level z-scores (mass spectrometry by CPTAC).txt", header = TRUE,sep = "\t")  
+oc_mrna_raw = read.delim("data/OC_TCGA_PanCan/mRNA expression z-scores relative to all samples (log RNA Seq V2 RSEM).txt", header = TRUE, sep = "\t")
+oc_cd_raw = read.delim("data/OC_TCGA_PanCan/ov_tcga_pan_can_atlas_2018_clinical_data.tsv", header = TRUE)  
+oc_cna_raw = read.delim("data/OC_TCGA_PanCan/cna.txt", header = TRUE, sep = "\t")
+oc_mut_raw = read.delim("data/OC_TCGA_PanCan/mutations.txt", header = TRUE, sep = "\t")
+```
+
+# Cleaning Data
+
+```{r}
+cd_columns = c("Sample.ID", "Overall.Survival..Months.", "Aneuploidy.Score", "Mutation.Count", "MSI.MANTIS.Score", "MSIsensor.Score", "Fraction.Genome.Altered")
+
+bc_pe = na.omit(bc_pe_raw[, -c(1, 7)])
+bc_mrna = na.omit(bc_mrna_raw[, -1])
+bc_cd = na.omit(bc_cd_raw[, cd_columns])
+colnames(bc_cd)[c(1, 2)] = c("SAMPLE_ID", "Survival.[months]")
+bc_cna = bc_cna_raw[!rowSums(bc_cna_raw == "NP"), -1]
+bc_mut = bc_mut_raw[!rowSums(bc_mut_raw == "NP"), -1]
+
+oc_pe = na.omit(oc_pe_raw[, -c(1, 6, 7)])
+oc_mrna = na.omit(oc_mrna_raw[, -1])
+oc_cd = na.omit(oc_cd_raw[, cd_columns])
+colnames(oc_cd)[c(1, 2)] = c("SAMPLE_ID", "Survival.[months]")
+oc_cna = oc_cna_raw[!rowSums(oc_cna_raw == "NP"), -1]
+oc_mut = oc_mut_raw[!rowSums(oc_mut_raw == "NP"), -1]
+```
+
+# Merging Data
+
+```{r}
+bc_cd_pe = merge(bc_cd, bc_pe, by = "SAMPLE_ID")
+bc_cd_pe_mut = merge(bc_cd_pe, bc_mut, by = "SAMPLE_ID")
+bc_cd_mrna = merge(bc_cd, bc_mrna, by = "SAMPLE_ID")
+bc_cd_mrna_mut = merge(bc_cd_mrna, bc_mut, by = "SAMPLE_ID")
+bc_pe_mrna = merge(bc_pe, bc_mrna, by = "SAMPLE_ID")
+bc_pe_mrna_mut = merge(bc_pe_mrna, bc_mut, by = "SAMPLE_ID")
+bc_pe_cna = merge(bc_pe, bc_cna, by = "SAMPLE_ID")
+bc_mrna_cna = merge(bc_mrna, bc_cna, by = "SAMPLE_ID")
+
+oc_cd_pe = merge(oc_cd, oc_pe, by = "SAMPLE_ID")
+oc_cd_pe_mut = merge(oc_cd_pe, oc_mut, by = "SAMPLE_ID")
+oc_cd_mrna = merge(oc_cd, oc_mrna, by = "SAMPLE_ID")
+oc_cd_mrna_mut = merge(oc_cd_mrna, oc_mut, by = "SAMPLE_ID")
+oc_pe_mrna = merge(oc_pe, oc_mrna, by = "SAMPLE_ID")
+oc_pe_mrna_mut = merge(oc_pe_mrna, oc_mut, by = "SAMPLE_ID")
+oc_pe_cna = merge(oc_pe, oc_cna, by = "SAMPLE_ID")
+oc_mrna_cna = merge(oc_mrna, oc_cna, by = "SAMPLE_ID")
+```
+
+# Plotting Data  
+
+```{r}
+genes = c("TPX2", "AURKA", "TIA1", "TIAL1", "BRCA1", "BRCA2", "TP53")
+genes_pe_bc = c("TPX2", "AURKA", "TIA1", "TIAL1", "BRCA1", "TP53")
+genes_pe_oc = c("TPX2", "TIA1", "TIAL1", "BRCA2", "TP53")
+data_list = list(bc_cd_pe_mut, bc_cd_mrna_mut, oc_cd_pe_mut, oc_cd_mrna_mut)
+cancer_list = c("BC", "BC", "OC", "OC")
+expr_list = c("Protein", "mRNA", "Protein", "mRNA")
+x_lim = c(-3, 3)
+```
+
+## Clinical Data vs Protein Expression  
+
+```{r}
+plot_cd_expr = function(data, genes, expr_type, cancer_type, clinic, 
+                        x_lim = NULL, y_lim = NULL, use_ranks = FALSE) {
+  par(mfrow = c(2, 4), mar = c(4, 4, 4, 1), oma = c(0, 0, 3, 0), pty = "s")
+  for (gene in genes) {
+    x = data[[paste0(gene, ".x")]]
+    y = data[[clinic]]
+    mut_status = data[[paste0(gene, ".y")]]
+    colors = ifelse(mut_status == "WT", alpha("blue", 0.5), alpha("darkmagenta", 0.5))
+    
+    if (use_ranks) {
+      x = rank(x)
+      y = rank(y)
+    }
+    
+    model = lm(y ~ x)
+    test = cor.test(x, y, method = "pearson")
+    pearson_cor = round(cor(x, y, method = "pearson"), 2)
+    p_value = signif(test$p.value, 2)
+    n_points = length(x)
+    
+    x_lab = ifelse(use_ranks, sprintf("Ranked %s Expression [z-score]", gene), 
+                       sprintf("%s Expression [z-score]", gene))
+    y_lab = ifelse(use_ranks, sprintf("Ranked %s", clinic),
+                     sprintf("%s", gsub("\\.", " ", clinic)))
+    plot(
+      x = x,
+      y = y,
+      xlim = x_lim,
+      ylim = y_lim,
+      xlab = x_lab,
+      ylab = y_lab,
+      main = sprintf("%s: r = %s, p = %s", gene, pearson_cor, p_value),
+      col = colors,
+      pch = 19
+    )
+    abline(model, col = "red", lwd = 2)
+  }
+  title(
+    main = sprintf("%s: %s%s Expression vs %s (n = %s)", cancer_type, 
+                       if (use_ranks) "Ranked " else "",
+                       expr_type, gsub("\\.", " ", clinic), n_points),
+    outer = TRUE,
+    cex.main = 2
+    )
+  plot.new()
+  legend(
+    "center",
+    legend = c("WT", "Mutated"),
+    col = c(alpha("blue", 0.5), alpha("darkmagenta", 0.5)),
+    pch = 19,
+    pt.cex = 1.5,
+    horiz = TRUE,
+    bty = "n"
+  )
+}
+```
+
+```{r}
+plot_focus_cd = function(focus, data_list, cancer_list, expr_list, clinic, x_lim = NULL, y_lim = NULL) {
+  valid_datasets = sapply(data_list, function(dataset) {
+    all(c(paste0(focus, ".x"), paste0(focus, ".y")) %in% names(dataset))
+  })
+  par(mfrow = c(1, 4), mar = c(4, 4, 5, 1), oma = c(0, 0, 1, 0), pty = "s")
+  for (i in which(valid_datasets)){
+    data = data_list[[i]]
+    cancer_type = cancer_list[[i]]
+    expr_type = expr_list[[i]]
+    
+    x = data[[paste0(focus, ".x")]]
+    y = data[[clinic]]
+    mut_status = data[[paste0(focus, ".y")]]
+    colors = ifelse(mut_status == "WT", alpha("blue", 0.5), alpha("darkmagenta", 0.5))
+    
+    model = lm(y ~ x)
+    test = cor.test(x, y, method = "pearson")
+    pearson_cor = round(cor(x, y, method = "pearson"), 2)
+    p_value = signif(test$p.value, 2)
+    n_points = length(x)
+    
+    plot(
+      x = x,
+      y = y,
+      xlim = x_lim,
+      ylim = y_lim,
+      xlab = sprintf("%s Expression [z-score]", focus),
+      ylab = sprintf("%s", gsub("\\.", " ", clinic)),
+      main = sprintf("%s: %s (n = %s)", cancer_type, expr_type, n_points),
+      mtext(sprintf("r = %s, p = %s", pearson_cor, p_value), side = 3, line = 0.5, cex = 0.8),
+      col = colors,
+      pch = 19
+    )
+    abline(model, col = "red", lwd = 2)
+    legend(
+      "topright",
+      legend = c("WT", "Mutated"),
+      col = c(alpha("blue", 0.5), alpha("darkmagenta", 0.5)),
+      pch = 19,
+      pt.cex = 1.5,
+    )
+  }
+  title(
+    main = sprintf("%s Expression vs %s", focus, gsub("\\.", " ", clinic)),
+    outer = TRUE,
+    cex.main = 2
+  )
+}
+```
+
+### Overall Survival Months  
+
+```{r, fig.height = 6, fig.width = 9}
+y_lim = c(0, 200)
+plot_cd_expr(bc_cd_pe_mut, genes_pe_bc, "Protein", "BC", "Survival.[months]", x_lim, y_lim)
+plot_cd_expr(bc_cd_mrna_mut, genes, "mRNA", "BC", "Survival.[months]", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, genes_pe_oc, "Protein", "OC", "Survival.[months]", x_lim, y_lim)
+plot_cd_expr(oc_cd_mrna_mut, genes, "mRNA", "OC", "Survival.[months]", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, "TIAL1", "Protein", "OC", "Survival.[months]", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_cd("TPX2", data_list, cancer_list, expr_list, "Survival.[months]", x_lim, y_lim)
+```
+
+### Aneuploidy Score  
+
+```{r, fig.height = 6, fig.width = 9}
+y_lim = c(0, 30)
+plot_cd_expr(bc_cd_pe_mut, genes_pe_bc, "Protein", "BC", "Aneuploidy.Score", x_lim, y_lim)
+plot_cd_expr(bc_cd_mrna_mut, genes, "mRNA", "BC", "Aneuploidy.Score", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, genes_pe_oc, "Protein", "OC", "Aneuploidy.Score", x_lim, y_lim)
+plot_cd_expr(oc_cd_mrna_mut, genes, "mRNA", "OC", "Aneuploidy.Score", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, c("TPX2", "TIA1", "TP53"), "Protein", "OC", "Aneuploidy.Score", x_lim, y_lim)
+```
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_cd("TPX2", data_list, cancer_list, expr_list, "Aneuploidy.Score", x_lim, y_lim)
+plot_focus_cd("AURKA", data_list, cancer_list, expr_list, "Aneuploidy.Score", x_lim, y_lim)
+plot_focus_cd("TIA1", data_list, cancer_list, expr_list, "Aneuploidy.Score", x_lim, y_lim)
+plot_focus_cd("BRCA1", data_list, cancer_list, expr_list, "Aneuploidy.Score", x_lim, y_lim)
+plot_focus_cd("BRCA2", data_list, cancer_list, expr_list, "Aneuploidy.Score", x_lim, y_lim)
+```
+
+### Mutation Count  
+
+```{r, fig.height = 6, fig.width = 9}
+y_lim = c(0, 300)
+plot_cd_expr(bc_cd_pe_mut, genes_pe_bc, "Protein", "BC", "Mutation.Count", x_lim, y_lim)
+plot_cd_expr(bc_cd_mrna_mut, genes, "mRNA", "BC", "Mutation.Count", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, genes_pe_oc, "Protein", "OC", "Mutation.Count", x_lim, y_lim)
+plot_cd_expr(oc_cd_mrna_mut, genes, "mRNA", "OC", "Mutation.Count", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_cd("TP53", data_list, cancer_list, expr_list, "Mutation.Count", x_lim, y_lim)
+```
+
+### Fraction Genome Altered 
+
+```{r, fig.height = 6, fig.width = 9}
+y_lim = c(0, 1)
+plot_cd_expr(bc_cd_pe_mut, genes_pe_bc, "Protein", "BC", "Fraction.Genome.Altered", x_lim, y_lim)
+plot_cd_expr(bc_cd_mrna_mut, genes, "mRNA", "BC", "Fraction.Genome.Altered", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, genes_pe_oc, "Protein", "OC", "Fraction.Genome.Altered", x_lim, y_lim)
+plot_cd_expr(oc_cd_mrna_mut, genes, "mRNA", "OC", "Fraction.Genome.Altered", x_lim, y_lim)
+```
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_cd("TPX2", data_list, cancer_list, expr_list, "Fraction.Genome.Altered", x_lim, y_lim)
+plot_focus_cd("AURKA", data_list, cancer_list, expr_list, "Fraction.Genome.Altered", x_lim, y_lim)
+plot_focus_cd("TIA1", data_list, cancer_list, expr_list, "Fraction.Genome.Altered", x_lim, y_lim)
+```
+
+### MSI MANTIS Score 
+
+```{r, fig.height = 6, fig.width = 9}
+y_lim = c(0.25, 0.55)
+plot_cd_expr(bc_cd_pe_mut, genes_pe_bc, "Protein", "BC", "MSI.MANTIS.Score", x_lim, y_lim)
+plot_cd_expr(bc_cd_mrna_mut, genes, "mRNA", "BC", "MSI.MANTIS.Score", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, genes_pe_oc, "Protein", "OC", "MSI.MANTIS.Score", x_lim, y_lim)
+plot_cd_expr(oc_cd_mrna_mut, genes, "mRNA", "OC", "MSI.MANTIS.Score", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_cd("TIA1", data_list, cancer_list, expr_list, "MSI.MANTIS.Score", x_lim, y_lim)
+```
+
+### MSIsensor Score 
+
+```{r, fig.height = 6, fig.width = 9}
+y_lim = c(0, 10)
+plot_cd_expr(bc_cd_pe_mut, genes_pe_bc, "Protein", "BC", "MSIsensor.Score", x_lim, y_lim)
+plot_cd_expr(bc_cd_mrna_mut, genes, "mRNA", "BC", "MSIsensor.Score", x_lim, y_lim)
+plot_cd_expr(oc_cd_pe_mut, genes_pe_oc, "Protein", "OC", "MSIsensor.Score", x_lim, y_lim)
+plot_cd_expr(oc_cd_mrna_mut, genes, "mRNA", "OC", "MSIsensor.Score", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_cd("TPX2", data_list, cancer_list, expr_list, "MSIsensor.Score", x_lim, y_lim)
+plot_focus_cd("AURKA", data_list, cancer_list, expr_list, "MSIsensor.Score", x_lim, y_lim)
+plot_focus_cd("BRCA2", data_list, cancer_list, expr_list, "MSIsensor.Score", x_lim, y_lim)
+```
+
+## Expressions vs Expression 
+
+```{r}
+plot_expr_expr = function(data, focus, genes, expr_type, cancer_type, x_lim = NULL, y_lim = NULL){
+  other_genes = setdiff(genes, focus)
+  par(mfrow = c(2, 4), mar = c(4, 4, 4, 1), oma = c(0, 0, 3, 0), pty = "s")
+  for (gene in other_genes) {
+    x = data[[paste0(focus, ".x")]]
+    y = data[[paste0(gene, ".x")]]
+    mut_status = data[[paste0(gene, ".y")]]
+    colors = ifelse(mut_status == "WT", alpha("blue", 0.5), alpha("darkmagenta", 0.5))
+    
+    model = lm(y ~ x)
+    test = cor.test(x, y, method = "pearson")
+    pearson_cor = round(cor(x, y, method = "pearson"), 2)
+    p_value = signif(test$p.value, 2)
+    n_points = length(x)
+    
+    plot(
+      x = x,
+      y = y,
+      xlim = x_lim,
+      ylim = y_lim,
+      xlab = sprintf("%s Expression [z-score]", focus),
+      ylab = sprintf("%s Expression [z-score]", gene),
+      main = sprintf("%s: r = %s, p = %s", gene, pearson_cor, p_value),
+      col = colors,
+      pch = 19
+    )
+    abline(model, col = "red", lwd = 2)
+  }
+  title(
+    main = sprintf("%s: %s %s Co-Expression (n = %s)", cancer_type, focus, expr_type, n_points),
+    outer = TRUE,
+    cex.main = 2
+  )
+  plot.new()
+  legend(
+    "center",
+    legend = c("WT", "Mutated"),
+    col = c(alpha("blue", 0.5), alpha("darkmagenta", 0.5)),
+    pch = 19,
+    pt.cex = 1.5,
+    horiz = TRUE,
+    bty = "n"
+  )
+}
+```
+
+```{r}
+plot_focus_expr = function(focus, data_list, cancer_list, expr_list, gene, 
+                           x_lim = NULL, y_lim = NULL) {
+  valid_datasets = sapply(data_list, function(dataset) {
+    all(c(paste0(focus, ".x"), paste0(focus, ".y"), 
+          paste0(gene, ".x"), paste0(gene, ".y")) %in% names(dataset))
+  })
+  par(mfrow = c(1, 4), mar = c(4, 4, 5, 1), oma = c(0, 0, 3, 0), pty = "s")
+  for (i in which(valid_datasets)) {
+    data = data_list[[i]]
+    cancer_type = cancer_list[[i]]
+    expr_type = expr_list[[i]]
+    
+    x = data[[paste0(focus, ".x")]]
+    y = data[[paste0(gene, ".x")]]
+    mut_status = data[[paste0(gene, ".y")]]
+    colors = ifelse(mut_status == "WT", alpha("blue", 0.5), alpha("darkmagenta", 0.5))
+    
+    model = lm(y ~ x)
+    test = cor.test(x, y, method = "pearson")
+    pearson_cor = round(cor(x, y, method = "pearson"), 2)
+    p_value = signif(test$p.value, 2)
+    n_points = length(x)
+    
+    plot(
+      x = x,
+      y = y,
+      xlim = x_lim,
+      ylim = y_lim,
+      xlab = sprintf("%s Expression [z-score]", focus),
+      ylab = sprintf("%s Expression [z-score]", gene),
+      main = sprintf("%s: %s (n = %s)", cancer_type, expr_type, n_points),
+      mtext(sprintf("r = %s, p = %s", pearson_cor, p_value), side = 3, line = 0.5, cex = 0.8),
+      col = colors,
+      pch = 19
+    )
+    abline(model, col = "red", lwd = 2)
+    legend(
+      "topright",
+      legend = c("WT", "Mutated"),
+      col = c(alpha("blue", 0.5), alpha("darkmagenta", 0.5)),
+      pch = 19,
+      pt.cex = 1.5
+    )
+  }
+  title(
+    main = sprintf("%s & %s Co-Expression", focus, gene),
+    outer = TRUE,
+    cex.main = 2
+  )
+}
+```
+
+```{r}
+x_lim = c(-3, 3)
+y_lim = c(-3, 3)
+```
+
+```{r, fig.height = 6, fig.width = 9}
+focus = "TPX2"
+plot_expr_expr(bc_cd_pe_mut, focus, genes_pe_bc, "Protein", "BC", x_lim, y_lim)
+plot_expr_expr(bc_cd_mrna_mut, focus, genes, "mRNA", "BC", x_lim, y_lim)
+plot_expr_expr(oc_cd_pe_mut, focus, genes_pe_oc, "Protein", "OC", x_lim, y_lim)
+plot_expr_expr(oc_cd_mrna_mut, focus, genes, "mRNA", "OC", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_expr("AURKA", data_list, cancer_list, expr_list, "TPX2", x_lim, y_lim)
+plot_focus_expr("BRCA1", data_list, cancer_list, expr_list, "TPX2", x_lim, y_lim)
+plot_focus_expr("BRCA2", data_list, cancer_list, expr_list, "TPX2", x_lim, y_lim)
+```
+
+```{r, fig.height = 6, fig.width = 9}
+focus = "AURKA"
+plot_expr_expr(bc_cd_pe_mut, focus, genes_pe_bc, "Protein", "BC", x_lim, y_lim)
+plot_expr_expr(bc_cd_mrna_mut, focus, genes, "mRNA", "BC", x_lim, y_lim)
+
+plot_expr_expr(oc_cd_mrna_mut, focus, genes, "mRNA", "OC", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_expr("BRCA1", data_list, cancer_list, expr_list, "AURKA", x_lim, y_lim)
+plot_focus_expr("BRCA2", data_list, cancer_list, expr_list, "AURKA", x_lim, y_lim)
+```
+
+```{r, fig.height = 6, fig.width = 9}
+focus = "TIA1"
+plot_expr_expr(bc_cd_pe_mut, focus, genes_pe_bc, "Protein", "BC", x_lim, y_lim)
+plot_expr_expr(bc_cd_mrna_mut, focus, genes, "mRNA", "BC", x_lim, y_lim)
+plot_expr_expr(oc_cd_pe_mut, focus, genes_pe_oc, "Protein", "OC", x_lim, y_lim)
+plot_expr_expr(oc_cd_mrna_mut, focus, genes, "mRNA", "OC", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_expr("TIAL1", data_list, cancer_list, expr_list, "TIA1", x_lim, y_lim)
+plot_focus_expr("BRCA1", data_list, cancer_list, expr_list, "TIA1", x_lim, y_lim)
+plot_focus_expr("BRCA2", data_list, cancer_list, expr_list, "TIA1", x_lim, y_lim)
+```
+
+```{r, fig.height = 6, fig.width = 9}
+focus = "TIAL1"
+plot_expr_expr(bc_cd_pe_mut, focus, genes_pe_bc, "Protein", "BC", x_lim, y_lim)
+plot_expr_expr(bc_cd_mrna_mut, focus, genes, "mRNA", "BC", x_lim, y_lim)
+plot_expr_expr(oc_cd_pe_mut, focus, genes_pe_oc, "Protein", "OC", x_lim, y_lim)
+plot_expr_expr(oc_cd_mrna_mut, focus, genes, "mRNA", "OC", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_expr("BRCA1", data_list, cancer_list, expr_list, "TIAL1", x_lim, y_lim)
+plot_focus_expr("BRCA2", data_list, cancer_list, expr_list, "TIAL1", x_lim, y_lim)
+```
+
+```{r, fig.height = 6, fig.width = 9}
+focus = "BRCA1"
+plot_expr_expr(bc_cd_pe_mut, focus, genes_pe_bc, "Protein", "BC", x_lim, y_lim)
+plot_expr_expr(bc_cd_mrna_mut, focus, genes, "mRNA", "BC", x_lim, y_lim)
+
+plot_expr_expr(oc_cd_mrna_mut, focus, genes, "mRNA", "OC", x_lim, y_lim)
+```
+
+```{r, fig.height = 3, fig.width = 9}
+plot_focus_expr("BRCA2", data_list, cancer_list, expr_list, "BRCA1", x_lim, y_lim)
+```
+
+```{r, fig.height = 6, fig.width = 9}
+focus = "BRCA2"
+
+plot_expr_expr(bc_cd_mrna_mut, focus, genes, "mRNA", "BC", x_lim, y_lim)
+plot_expr_expr(oc_cd_pe_mut, focus, genes_pe_oc, "Protein", "OC", x_lim, y_lim)
+plot_expr_expr(oc_cd_mrna_mut, focus, genes, "mRNA", "OC", x_lim, y_lim)
+```
+```{r, fig.height = 6, fig.width = 9}
+focus = "TP53"
+plot_expr_expr(bc_cd_pe_mut, focus, genes_pe_bc, "Protein", "BC", x_lim, y_lim)
+plot_expr_expr(bc_cd_mrna_mut, focus, genes, "mRNA", "BC", x_lim, y_lim)
+plot_expr_expr(oc_cd_pe_mut, focus, genes_pe_oc, "Protein", "OC", x_lim, y_lim)
+plot_expr_expr(oc_cd_mrna_mut, focus, genes, "mRNA", "OC", x_lim, y_lim)
+```
+
+
+## Transcriptomics Validation
+
+```{r}
+plot_pe_mrna = function(data, genes, cancer_type, x_lim = NULL, y_lim = NULL) {
+  par(mfrow = c(2, 4), mar = c(4, 4, 4, 1), oma = c(0, 0, 3, 0), pty = "s")
+  for (gene in genes) {
+    x = data[[paste0(gene, ".x")]]
+    y = data[[paste0(gene, ".y")]]
+    mut_status = data[[gene]]
+    colors = ifelse(mut_status == "WT", alpha("blue", 0.5), alpha("darkmagenta", 0.5))
+    
+    model = lm(y ~ x)
+    test = cor.test(x, y, method = "pearson")
+    pearson_cor = round(cor(x, y, method = "pearson"), 2)
+    p_value = signif(test$p.value, 2)
+    n_points = length(x)
+    
+    plot(
+      x = x,
+      y = y,
+      xlim = x_lim,
+      ylim = y_lim,
+      xlab = "Protein Expression [z-score]",
+      ylab = "mRNA Expression [z-score]",
+      main = sprintf("%s: r = %s, p = %s", gene, pearson_cor, p_value),
+      col = colors,
+      pch = 19
+    )
+    abline(model, col = "red", lwd = 2)
+  }
+  title(
+    main = sprintf("%s: mRNA vs Protein Expression (n = %s)", cancer_type, n_points),
+    outer = TRUE,
+    cex.main = 2
+  )
+  plot.new()
+  legend(
+    "center",
+    legend = c("WT", "Mutated"),
+    col = c(alpha("blue", 0.5), alpha("darkmagenta", 0.5)),
+    pch = 19,
+    pt.cex = 1.5,
+    horiz = TRUE,
+    bty = "n"
+  )
+}
+```
+
+```{r, fig.height = 6, fig.width = 9}
+x_lim = c(-3, 3)
+y_lim = c(-3, 3)
+plot_pe_mrna(bc_pe_mrna_mut, genes_pe_bc, "BC", x_lim, y_lim)
+plot_pe_mrna(oc_pe_mrna_mut, genes_pe_oc, "OC", x_lim, y_lim)
+```
+
+## CNA
+
+```{r}
+boxplot_cna = function(data, genes, ref_gene, expr_type, cancer_type) {
+  par(mfrow = c(2, 4), mar = c(4, 4, 4, 1), oma = c(0, 0, 3, 0), pty = "s")
+  
+  cna = data[[paste0(ref_gene, ".y")]]
+  cna_group = factor(ifelse(cna < 0, "Loss", ifelse(cna > 0, "Gain", "Neutral")),
+                     levels = c("Loss", "Neutral", "Gain"))
+  
+  for (gene in genes) {
+    expr = data[[paste0(gene, ".x")]]
+    n_points = length(expr)
+
+    boxplot(expr ~ cna_group,
+            main = gene,
+            ylim = c(-3, 3),
+            xlab = sprintf("CNA Status of %s", ref_gene),
+            ylab = sprintf("Expression of %s", gene),
+            col = c("skyblue", "gray90", "salmon"),
+            border = "black",
+            outline = TRUE)
+  }
+
+  title(main = sprintf("%s: %s Expression by CNA of %s (n = %s)", cancer_type, expr_type, ref_gene, n_points), outer = TRUE, cex.main = 1.5)
+  par(mfrow = c(1, 1), oma = c(0,0,0,0))
+}
+```
+
+```{r, fig.height = 6, fig.width = 9}
+boxplot_cna(bc_mrna_cna, genes, "BRCA1", "mRNA", "BC")
+boxplot_cna(oc_mrna_cna, genes, "BRCA1", "mRNA", "OC")
+```
+
+```{r, fig.height = 6, fig.width = 9}
+boxplot_cna(bc_mrna_cna, genes, "BRCA2", "mRNA", "BC")
+boxplot_cna(oc_mrna_cna, genes, "BRCA2", "mRNA", "OC")
+```
+
+```{r, fig.height = 6, fig.width = 9}
+boxplot_cna(bc_mrna_cna, genes, "TP53", "mRNA", "BC")
+boxplot_cna(oc_mrna_cna, genes, "TP53", "mRNA", "OC")
+```
+
+```{r, fig.height = 6, fig.width = 9}
+boxplot_cna(bc_mrna_cna, genes, "TPX2", "mRNA", "BC")
+boxplot_cna(oc_mrna_cna, genes, "TPX2", "mRNA", "OC")
+```
+
+```{r, fig.height = 6, fig.width = 9}
+boxplot_cna(bc_mrna_cna, genes, "AURKA", "mRNA", "BC")
+boxplot_cna(oc_mrna_cna, genes, "AURKA", "mRNA", "OC")
+```
+
+```{r, fig.height = 6, fig.width = 9}
+boxplot_cna(bc_mrna_cna, genes, "TIA1", "mRNA", "BC")
+boxplot_cna(oc_mrna_cna, genes, "TIA1", "mRNA", "OC")
+```
+
+```{r, fig.height = 6, fig.width = 9}
+boxplot_cna(bc_mrna_cna, genes, "TIAL1", "mRNA", "BC")
+boxplot_cna(oc_mrna_cna, genes, "TIAL1", "mRNA", "OC")
+```
